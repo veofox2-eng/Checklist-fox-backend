@@ -164,6 +164,23 @@ app.put('/api/checklists/:id', async (req, res) => {
 
 // Delete checklist
 app.delete('/api/checklists/:id', async (req, res) => {
+  const { profile_id, password } = req.body;
+
+  if (!profile_id || !password) {
+    return res.status(400).json({ error: 'Profile ID and password required for deletion' });
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('password_hash')
+    .eq('id', profile_id)
+    .single();
+
+  if (profileError || !profile) return res.status(404).json({ error: 'Profile not found' });
+
+  const isMatch = await bcrypt.compare(password, profile.password_hash);
+  if (!isMatch) return res.status(401).json({ error: 'Invalid password' });
+
   const { error } = await supabase
     .from('checklists')
     .delete()
@@ -173,15 +190,168 @@ app.delete('/api/checklists/:id', async (req, res) => {
   res.status(204).send();
 });
 
+// --- Share Requests ---
+
+// Send a share request
+app.post('/api/checklists/:id/share', async (req, res) => {
+  const { sender_id, receiver_name } = req.body;
+  const checklist_id = req.params.id;
+
+  if (!sender_id || !receiver_name) return res.status(400).json({ error: 'Sender ID and receiver name required' });
+
+  const { data: receiver, error: receiverError } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('name', receiver_name)
+    .single();
+
+  if (receiverError || !receiver) return res.status(404).json({ error: 'Receiver profile not found' });
+
+  const { data, error } = await supabase
+    .from('share_requests')
+    .insert([{ checklist_id, sender_id, receiver_id: receiver.id }])
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+// Get pending share requests for a profile
+app.get('/api/profiles/:id/share-requests', async (req, res) => {
+  const { data, error } = await supabase
+    .from('share_requests')
+    .select(`
+      id, status, created_at, checklist_id,
+      checklists ( title ),
+      profiles!share_requests_sender_id_fkey ( name, avatar_url )
+    `)
+    .eq('receiver_id', req.params.id)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// Respond to a share request
+app.post('/api/share-requests/:id/respond', async (req, res) => {
+  const { action } = req.body; // 'accept' or 'reject'
+  if (!['accept', 'reject'].includes(action)) return res.status(400).json({ error: 'Invalid action' });
+
+  const { data: request, error: reqError } = await supabase
+    .from('share_requests')
+    .select('*')
+    .eq('id', req.params.id)
+    .single();
+
+  if (reqError || !request) return res.status(404).json({ error: 'Request not found' });
+  if (request.status !== 'pending') return res.status(400).json({ error: 'Request already processed' });
+
+  const { error: updateError } = await supabase
+    .from('share_requests')
+    .update({ status: action === 'accept' ? 'accepted' : 'rejected' })
+    .eq('id', req.params.id);
+
+  if (updateError) return res.status(500).json({ error: updateError.message });
+
+  if (action === 'accept') {
+    const { data: originalChecklist, error: clError } = await supabase
+      .from('checklists')
+      .select('*')
+      .eq('id', request.checklist_id)
+      .single();
+
+    if (clError) return res.status(500).json({ error: clError.message });
+
+    const { data: newChecklist, error: newClError } = await supabase
+      .from('checklists')
+      .insert([{
+        profile_id: request.receiver_id,
+        title: originalChecklist.title,
+        is_shared_copy: true
+      }])
+      .select()
+      .single();
+
+    if (newClError) return res.status(500).json({ error: newClError.message });
+
+    const { data: tasks, error: tasksError } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('checklist_id', request.checklist_id)
+      .order('created_at', { ascending: true });
+
+    if (tasksError) return res.status(500).json({ error: tasksError.message });
+
+    const idMap = {};
+    for (const task of tasks) {
+      const newTaskData = {
+        checklist_id: newChecklist.id,
+        parent_id: task.parent_id ? idMap[task.parent_id] : null,
+        title: task.title,
+        description: task.description,
+        order_num: task.order_num,
+        start_time: task.start_time,
+        end_time: task.end_time,
+        allocated_time: task.allocated_time,
+        is_completed: task.is_completed
+      };
+
+      const { data: newTask, error: nTError } = await supabase
+        .from('tasks')
+        .insert([newTaskData])
+        .select()
+        .single();
+
+      if (!nTError && newTask) {
+        idMap[task.id] = newTask.id;
+      }
+    }
+    return res.json({ message: 'Accepted and cloned checklist' });
+  }
+
+  res.json({ message: 'Rejected share request' });
+});
+
+// --- Timer Logs ---
+
+// Add a timer log
+app.post('/api/checklists/:id/timer-logs', async (req, res) => {
+  const { elapsed_seconds } = req.body;
+  if (elapsed_seconds === undefined) return res.status(400).json({ error: 'Elapsed seconds required' });
+
+  const { data, error } = await supabase
+    .from('timer_logs')
+    .insert([{ checklist_id: req.params.id, elapsed_seconds }])
+    .select()
+    .single();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json(data);
+});
+
+// Get timer logs
+app.get('/api/checklists/:id/timer-logs', async (req, res) => {
+  const { data, error } = await supabase
+    .from('timer_logs')
+    .select('*')
+    .eq('checklist_id', req.params.id)
+    .order('created_at', { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
 // --- Tasks ---
 
 // Create a task (main task or sub-task)
 app.post('/api/tasks', async (req, res) => {
-  const { checklist_id, parent_id, title, order_num, start_time, end_time } = req.body;
+  const { checklist_id, parent_id, title, description, order_num, start_time, end_time, allocated_time } = req.body;
 
   const { data, error } = await supabase
     .from('tasks')
-    .insert([{ checklist_id, parent_id: parent_id || null, title, order_num, start_time, end_time }])
+    .insert([{ checklist_id, parent_id: parent_id || null, title, description, order_num, start_time, end_time, allocated_time }])
     .select()
     .single();
 
@@ -203,14 +373,16 @@ app.get('/api/checklists/:id/tasks', async (req, res) => {
 
 // Update a task
 app.put('/api/tasks/:id', async (req, res) => {
-  const { title, is_completed, order_num, start_time, end_time } = req.body;
+  const { title, description, is_completed, order_num, start_time, end_time, allocated_time } = req.body;
 
   const updates = {};
   if (title !== undefined) updates.title = title;
+  if (description !== undefined) updates.description = description;
   if (is_completed !== undefined) updates.is_completed = is_completed;
   if (order_num !== undefined) updates.order_num = order_num;
   if (start_time !== undefined) updates.start_time = start_time;
   if (end_time !== undefined) updates.end_time = end_time;
+  if (allocated_time !== undefined) updates.allocated_time = allocated_time;
 
   const { data, error } = await supabase
     .from('tasks')
