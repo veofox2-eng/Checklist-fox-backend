@@ -95,6 +95,23 @@ app.put('/api/profiles/:id', async (req, res) => {
 
 // Delete profile
 app.delete('/api/profiles/:id', async (req, res) => {
+  const { password } = req.body;
+
+  if (!password) {
+    return res.status(400).json({ error: 'Password required for deletion' });
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('password_hash')
+    .eq('id', req.params.id)
+    .single();
+
+  if (profileError || !profile) return res.status(404).json({ error: 'Profile not found' });
+
+  const isMatch = await bcrypt.compare(password, profile.password_hash);
+  if (!isMatch) return res.status(401).json({ error: 'Invalid password' });
+
   const { error } = await supabase
     .from('profiles')
     .delete()
@@ -108,12 +125,12 @@ app.delete('/api/profiles/:id', async (req, res) => {
 
 // Create checklist
 app.post('/api/checklists', async (req, res) => {
-  const { profile_id, title } = req.body;
+  const { profile_id, title, expected_date, extension_history } = req.body;
   if (!profile_id || !title) return res.status(400).json({ error: 'Profile ID and title required' });
 
   const { data, error } = await supabase
     .from('checklists')
-    .insert([{ profile_id, title }])
+    .insert([{ profile_id, title, expected_date, extension_history }])
     .select()
     .single();
 
@@ -150,10 +167,16 @@ app.get('/api/checklists/:id', async (req, res) => {
 
 // Update checklist
 app.put('/api/checklists/:id', async (req, res) => {
-  const { title } = req.body;
+  const { title, expected_date, extension_history } = req.body;
+
+  const updates = {};
+  if (title !== undefined) updates.title = title;
+  if (expected_date !== undefined) updates.expected_date = expected_date;
+  if (extension_history !== undefined) updates.extension_history = extension_history;
+
   const { data, error } = await supabase
     .from('checklists')
-    .update({ title })
+    .update(updates)
     .eq('id', req.params.id)
     .select()
     .single();
