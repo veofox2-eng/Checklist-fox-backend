@@ -366,6 +366,17 @@ app.get('/api/checklists/:id/timer-logs', async (req, res) => {
   res.json(data);
 });
 
+// Delete a timer log
+app.delete('/api/timer-logs/:log_id', async (req, res) => {
+  const { error } = await supabase
+    .from('timer_logs')
+    .delete()
+    .eq('id', req.params.log_id);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(204).send();
+});
+
 // --- Tasks ---
 
 // Create a task (main task or sub-task)
