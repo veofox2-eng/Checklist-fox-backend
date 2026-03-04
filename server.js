@@ -174,6 +174,8 @@ app.put('/api/checklists/:id', async (req, res) => {
   if (expected_date !== undefined) updates.expected_date = expected_date;
   if (extension_history !== undefined) updates.extension_history = extension_history;
 
+  console.log("Attempting checklist update with payload:", updates);
+
   const { data, error } = await supabase
     .from('checklists')
     .update(updates)
@@ -181,7 +183,11 @@ app.put('/api/checklists/:id', async (req, res) => {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    console.error("Supabase Error during PUT update:", error);
+    return res.status(500).json({ error: error.message, details: error.details, hint: error.hint });
+  }
+
   res.json(data);
 });
 
