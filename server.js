@@ -18,7 +18,8 @@ const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1", // Switch to Groq
 });
 
 // Helper for Audio Base64 to Transcription
@@ -38,16 +39,16 @@ async function transcribeAudio(base64Data) {
   fs.writeFileSync(tempFilePath, Buffer.from(base64Str, 'base64'));
 
   try {
-    console.log("Sending file to OpenAI Whisper API...");
+    console.log("Sending file to Groq Whisper API (whisper-large-v3)...");
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempFilePath),
-      model: "whisper-1",
+      model: "whisper-large-v3", // Use Groq's best model
       prompt: "This is a transcription of mixed Tamil and English (Tanglish) speech. Transcribe exactly as spoken without translation.",
     });
-    console.log("Transcription successful!");
+    console.log("Transcription successful via Groq!");
     return transcription.text;
   } catch (err) {
-    console.error("OpenAI API Error:", err.message);
+    console.error("Groq API Error:", err.message);
     if (err.response) {
       console.error("OpenAI Response Data:", err.response.data);
     }
