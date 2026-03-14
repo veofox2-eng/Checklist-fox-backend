@@ -25,23 +25,38 @@ const openai = new OpenAI({
 async function transcribeAudio(base64Data) {
   if (!base64Data) return null;
 
-  // Extract pure base64 if it has data:audio/... prefix
+  console.log("Transcribe Request: Processing Base64 data...");
   const base64Str = base64Data.includes('base64,') 
     ? base64Data.split('base64,')[1] 
     : base64Data;
 
-  const tempFilePath = path.join(os.tmpdir(), `audio_${Date.now()}.webm`);
+  const tempDir = os.tmpdir();
+  const tempFileName = `audio_${Date.now()}.webm`;
+  const tempFilePath = path.join(tempDir, tempFileName);
+  
+  console.log(`Writing temp file to: ${tempFilePath}`);
   fs.writeFileSync(tempFilePath, Buffer.from(base64Str, 'base64'));
 
   try {
+    console.log("Sending file to OpenAI Whisper API...");
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempFilePath),
       model: "whisper-1",
-      prompt: "This is a transcription of mixed Tamil and English (Tanglish) speech. Transcribe exactly as spoken without translation.", // Prompt helps with Tanglish
+      prompt: "This is a transcription of mixed Tamil and English (Tanglish) speech. Transcribe exactly as spoken without translation.",
     });
+    console.log("Transcription successful!");
     return transcription.text;
+  } catch (err) {
+    console.error("OpenAI API Error:", err.message);
+    if (err.response) {
+      console.error("OpenAI Response Data:", err.response.data);
+    }
+    throw err;
   } finally {
-    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+    if (fs.existsSync(tempFilePath)) {
+      console.log("Cleaning up temp file...");
+      fs.unlinkSync(tempFilePath);
+    }
   }
 }
 
@@ -513,8 +528,12 @@ app.post('/api/tasks/transcribe', async (req, res) => {
     const text = await transcribeAudio(audio_base64);
     res.json({ text });
   } catch (err) {
-    console.error("Transcription error:", err);
-    res.status(500).json({ error: 'Failed to transcribe audio: ' + err.message });
+    console.error("Full Transcription Route Error:", err);
+    res.status(500).json({ 
+      error: 'Failed to transcribe audio', 
+      details: err.message,
+      code: err.code || 'UNKNOWN_ERROR'
+    });
   }
 });
 
