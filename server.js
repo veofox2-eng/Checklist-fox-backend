@@ -290,7 +290,7 @@ app.post('/api/checklists/:id/share', async (req, res) => {
       checklist_id, 
       sender_id, 
       receiver_id: receiver.id,
-      description: req.body.task_ids ? JSON.stringify(req.body.task_ids) : null
+      description: req.body.description || (req.body.task_ids ? JSON.stringify(req.body.task_ids) : null)
     }])
     .select()
     .single();
