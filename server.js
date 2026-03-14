@@ -2,6 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const bcrypt = require('bcryptjs');
+const { OpenAI } = require('openai');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 require('dotenv').config();
 
 const app = express();
@@ -12,6 +16,34 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Helper for Audio Base64 to Transcription
+async function transcribeAudio(base64Data) {
+  if (!base64Data) return null;
+
+  // Extract pure base64 if it has data:audio/... prefix
+  const base64Str = base64Data.includes('base64,') 
+    ? base64Data.split('base64,')[1] 
+    : base64Data;
+
+  const tempFilePath = path.join(os.tmpdir(), `audio_${Date.now()}.webm`);
+  fs.writeFileSync(tempFilePath, Buffer.from(base64Str, 'base64'));
+
+  try {
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempFilePath),
+      model: "whisper-1",
+      prompt: "This is a transcription of mixed Tamil and English (Tanglish) speech. Transcribe exactly as spoken without translation.", // Prompt helps with Tanglish
+    });
+    return transcription.text;
+  } finally {
+    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+  }
+}
 
 // --- Profiles ---
 
@@ -470,6 +502,20 @@ app.delete('/api/tasks/:id', async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
   res.status(204).send();
+});
+
+// Transcribe audio
+app.post('/api/tasks/transcribe', async (req, res) => {
+  const { audio_base64 } = req.body;
+  if (!audio_base64) return res.status(400).json({ error: 'Audio data required' });
+
+  try {
+    const text = await transcribeAudio(audio_base64);
+    res.json({ text });
+  } catch (err) {
+    console.error("Transcription error:", err);
+    res.status(500).json({ error: 'Failed to transcribe audio: ' + err.message });
+  }
 });
 
 const PORT = process.env.PORT || 5000;

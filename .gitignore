@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.log
+*.bak
+tmp/
+audio_*.webm
+audio_*.ogg
