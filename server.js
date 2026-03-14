@@ -238,7 +238,12 @@ app.post('/api/checklists/:id/share', async (req, res) => {
 
   const { data, error } = await supabase
     .from('share_requests')
-    .insert([{ checklist_id, sender_id, receiver_id: receiver.id }])
+    .insert([{ 
+      checklist_id, 
+      sender_id, 
+      receiver_id: receiver.id,
+      description: req.body.task_ids ? JSON.stringify(req.body.task_ids) : null
+    }])
     .select()
     .single();
 
@@ -251,7 +256,7 @@ app.get('/api/profiles/:id/share-requests', async (req, res) => {
   const { data, error } = await supabase
     .from('share_requests')
     .select(`
-      id, status, created_at, checklist_id,
+      id, status, created_at, checklist_id, description,
       checklists ( title ),
       profiles!share_requests_sender_id_fkey ( name, avatar_url )
     `)
@@ -305,19 +310,39 @@ app.post('/api/share-requests/:id/respond', async (req, res) => {
 
     if (newClError) return res.status(500).json({ error: newClError.message });
 
-    const { data: tasks, error: tasksError } = await supabase
+    let tasksQuery = supabase
       .from('tasks')
       .select('*')
       .eq('checklist_id', request.checklist_id)
       .order('created_at', { ascending: true });
 
+    let sharedIds = null;
+    if (request.description) {
+      try {
+        sharedIds = typeof request.description === 'string' 
+          ? JSON.parse(request.description) 
+          : request.description;
+        
+        if (Array.isArray(sharedIds) && sharedIds.length > 0) {
+          tasksQuery = tasksQuery.in('id', sharedIds);
+        }
+      } catch (e) {
+        console.error("Error parsing shared task IDs:", e);
+      }
+    }
+
+    const { data: tasks, error: tasksError } = await tasksQuery;
     if (tasksError) return res.status(500).json({ error: tasksError.message });
 
     const idMap = {};
+    // We process tasks in order to ensure parents are (ideally) processed before children
+    // However, since partial sharing might break hierarchy, we treat shared tasks as top-level 
+    // if their parent isn't in the shared set.
     for (const task of tasks) {
       const newTaskData = {
         checklist_id: newChecklist.id,
-        parent_id: task.parent_id ? idMap[task.parent_id] : null,
+        // Only set parent_id if the parent task was ALSO shared and exists in our idMap
+        parent_id: (task.parent_id && idMap[task.parent_id]) ? idMap[task.parent_id] : null,
         title: task.title,
         description: task.description,
         order_num: task.order_num,
@@ -413,7 +438,7 @@ app.get('/api/checklists/:id/tasks', async (req, res) => {
 
 // Update a task
 app.put('/api/tasks/:id', async (req, res) => {
-  const { title, description, is_completed, order_num, start_time, end_time, allocated_time } = req.body;
+  const { title, description, is_completed, order_num, start_time, end_time, allocated_time, completed_at } = req.body;
 
   const updates = {};
   if (title !== undefined) updates.title = title;
@@ -423,6 +448,7 @@ app.put('/api/tasks/:id', async (req, res) => {
   if (start_time !== undefined) updates.start_time = start_time;
   if (end_time !== undefined) updates.end_time = end_time;
   if (allocated_time !== undefined) updates.allocated_time = allocated_time;
+  if (completed_at !== undefined) updates.completed_at = completed_at;
 
   const { data, error } = await supabase
     .from('tasks')
