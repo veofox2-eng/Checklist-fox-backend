@@ -19,7 +19,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const openai = new OpenAI({
   apiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY,
-  baseURL: "https://api.groq.com/openai/v1", // Switch to Groq
+  // Use Groq baseURL only if GROQ_API_KEY is present, otherwise fallback to default OpenAI URL
+  baseURL: process.env.GROQ_API_KEY ? "https://api.groq.com/openai/v1" : undefined,
 });
 
 // Helper for Audio Base64 to Transcription
@@ -532,6 +533,54 @@ app.post('/api/tasks/transcribe', async (req, res) => {
     console.error("Full Transcription Route Error:", err);
     res.status(500).json({ 
       error: 'Failed to transcribe audio', 
+      details: err.message,
+      code: err.code || 'UNKNOWN_ERROR'
+    });
+  }
+});
+
+// --- AI Chat ---
+app.post('/api/chat', async (req, res) => {
+  const { messages, contextData } = req.body;
+  if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Valid messages array required' });
+
+  try {
+    const isGroq = !!process.env.GROQ_API_KEY;
+    const model = isGroq ? "llama-3.1-8b-instant" : "gpt-4o-mini";
+
+    console.log(`AI Chat Request: Using model ${model} on ${isGroq ? 'Groq' : 'OpenAI'}`);
+
+    const systemPrompt = `You are an AI Assistant built into the TrackIt/Checklist Application. You help users manage their checklists, analyze tasks, and improve productivity.
+Here is the context data about the user's current view (e.g. current checklist tasks or dashboard info):
+${JSON.stringify(contextData || {})}
+
+Please provide concise, helpful, and friendly responses to the user's questions based on this context.`;
+
+    const chatMessages = [
+      { role: "system", content: systemPrompt },
+      ...messages
+    ];
+
+    const completion = await openai.chat.completions.create({
+      model: model,
+      messages: chatMessages,
+      temperature: 0.7,
+      max_tokens: 1024
+    });
+
+    const aiText = completion.choices[0]?.message?.content || "I'm sorry, I couldn't generate a response.";
+    res.json({ text: aiText });
+  } catch (err) {
+    console.error("AI Chat Error Details:", err);
+    
+    // Provide a descriptive error message to the frontend
+    let userMsg = "Failed to process AI chat response.";
+    if (err.status === 401) userMsg = "AI Authentication failed: Please check your API keys.";
+    else if (err.status === 404) userMsg = `AI Model not found on current provider.`;
+    else if (err.message) userMsg = `AI Error: ${err.message}`;
+
+    res.status(err.status || 500).json({ 
+      error: userMsg,
       details: err.message,
       code: err.code || 'UNKNOWN_ERROR'
     });
